@@ -2,6 +2,16 @@
   const ADJ = ["Nova", "Pixel", "Luna", "Neon", "Cosmo", "Amber", "Volt", "Echo"];
   const NOUN = ["Fox", "Wave", "Spark", "Orbit", "Bloom", "Drift", "Pulse", "Hawk"];
   const YT_ID = /^[a-zA-Z0-9_-]{11}$/;
+  const firebaseConfig = {
+    apiKey: "AIzaSyBoMXPjK4IzYSa18dSao56d4KB4xorLG7U",
+    authDomain: "friendly-90c71.firebaseapp.com",
+    databaseURL: "https://friendly-90c71-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "friendly-90c71",
+    storageBucket: "friendly-90c71.firebasestorage.app",
+    messagingSenderId: "503852021024",
+    appId: "1:503852021024:web:105b2ec7c3c30317a75345",
+    measurementId: "G-DKL5CY6P0B",
+  };
 
   const els = {
     landing: document.getElementById("view-landing"),
@@ -42,9 +52,7 @@
     role: null,
     roomId: null,
     username: randomName(),
-    peer: null,
-    conns: [],
-    guestConn: null,
+    roomRef: null,
     queue: [],
     current: null,
     player: null,
@@ -54,7 +62,7 @@
     hideBar: null,
     toastTimer: null,
     addedTimer: null,
-    bus: null,
+    seenInbox: {},
   };
 
   const sfx = {
@@ -63,6 +71,14 @@
   };
   sfx.added.preload = "auto";
   sfx.next.preload = "auto";
+
+  if (typeof firebase === "undefined") {
+    console.error("Firebase no cargó");
+  } else {
+    firebase.initializeApp(firebaseConfig);
+  }
+
+  const db = typeof firebase !== "undefined" ? firebase.database() : null;
 
   const params = new URLSearchParams(location.search);
   const joinId = params.get("sala");
@@ -221,20 +237,23 @@
     }
   }
 
-  function snapshot() {
-    return {
-      type: "state",
-      queue: state.queue,
-      current: state.current,
-    };
+  function asList(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.filter(Boolean);
+    return Object.keys(value).sort().map((key) => value[key]).filter(Boolean);
   }
 
-  function broadcast() {
-    const payload = snapshot();
-    state.conns.forEach((conn) => {
-      if (conn.open) conn.send(payload);
-    });
-    if (state.bus) state.bus.postMessage(payload);
+  function roomPath(roomId) {
+    return db.ref("rooms/" + roomId);
+  }
+
+  function publishState() {
+    if (state.roomRef) {
+      state.roomRef.child("playback").set({
+        current: state.current,
+        queue: state.queue,
+      });
+    }
     refreshHostUi();
   }
 
@@ -352,7 +371,7 @@
         player.playVideo();
       } catch (_) {}
     }
-    broadcast();
+    publishState();
   }
 
   async function playNext(announce) {
@@ -360,7 +379,7 @@
     if (!next) {
       state.current = null;
       if (state.player && state.player.stopVideo) state.player.stopVideo();
-      broadcast();
+      publishState();
       return;
     }
     await ensurePlayer();
@@ -377,48 +396,38 @@
     } else {
       showAddedToast(meta);
       playSfx(sfx.added);
-      broadcast();
+      publishState();
     }
     return { ok: true, title: meta.title };
   }
 
-  async function handleIncoming(msg, reply) {
-    if (!msg || typeof msg !== "object") return;
-    if (msg.type === "hello") {
-      reply(snapshot());
-      return;
-    }
-    if (msg.type !== "add") return;
+  async function handleInboxItem(snap) {
+    const key = snap.key;
+    if (!key || state.seenInbox[key]) return;
+    state.seenInbox[key] = true;
+    const msg = snap.val() || {};
     const id = extractVideoId(msg.video);
+    let reply;
     if (!id) {
-      reply({ type: "nack", reason: "invalid" });
-      return;
+      reply = { type: "nack", reason: "invalid" };
+    } else {
+      const result = await enqueue(id);
+      reply = { type: result.ok ? "ack" : "nack", title: result.title || null, reason: result.reason || null };
     }
-    const result = await enqueue(id);
-    reply({ type: result.ok ? "ack" : "nack", title: result.title, reason: result.reason });
-  }
-
-  function wireHostConn(conn) {
-    state.conns.push(conn);
-    conn.on("open", () => conn.send(snapshot()));
-    conn.on("data", (msg) => handleIncoming(msg, (out) => conn.open && conn.send(out)));
-    conn.on("close", () => {
-      state.conns = state.conns.filter((c) => c !== conn);
-    });
-  }
-
-  function openRoomBus(roomId, onMessage) {
-    if (typeof BroadcastChannel === "undefined") return null;
-    const bus = new BroadcastChannel("vq-" + roomId);
-    bus.onmessage = (event) => onMessage(event.data);
-    return bus;
+    state.roomRef.child("replies/" + key).set(reply);
+    snap.ref.remove();
   }
 
   async function startHost() {
+    if (!db) {
+      els.create.disabled = false;
+      return;
+    }
     els.create.disabled = true;
     const roomId = "vq" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
     state.role = "host";
     state.roomId = roomId;
+    state.roomRef = roomPath(roomId);
 
     await loadYouTube();
     show(els.host);
@@ -435,22 +444,18 @@
     paintQr(els.qrModalBox, url);
     refreshHostUi();
 
-    state.bus = openRoomBus(roomId, (msg) => {
-      handleIncoming(msg, (out) => state.bus && state.bus.postMessage(out));
-    });
-
-    if (typeof Peer !== "undefined") {
-      const peer = new Peer(roomId, { debug: 0 });
-      state.peer = peer;
-      peer.on("open", () => {
-        els.roomCode.textContent = "Sala " + roomId;
+    try {
+      await state.roomRef.set({
+        open: true,
+        created: Date.now(),
+        playback: { current: null, queue: [] },
       });
-      peer.on("connection", wireHostConn);
-      peer.on("error", (err) => {
-        if (err && err.type === "unavailable-id") location.reload();
+      state.roomRef.child("inbox").on("child_added", (snap) => {
+        handleInboxItem(snap);
       });
-    } else {
-      els.roomCode.textContent = "Sala " + roomId;
+    } catch (err) {
+      els.roomCode.textContent = "No se pudo crear la sala";
+      console.error(err);
     }
 
     await ensurePlayer();
@@ -495,7 +500,7 @@
   function renderGuestQueue(payload) {
     const items = [];
     if (payload.current) items.push({ ...payload.current, now: true });
-    (payload.queue || []).forEach((v) => items.push({ ...v, now: false }));
+    asList(payload.queue).forEach((v) => items.push({ ...v, now: false }));
     els.count.textContent = String(items.length);
     els.list.innerHTML = "";
     if (!items.length) {
@@ -523,98 +528,78 @@
     });
   }
 
-  function onGuestMessage(msg) {
-    if (!msg || typeof msg !== "object") return;
-    if (msg.type === "state") renderGuestQueue(msg);
-    if (msg.type === "ack") {
-      els.feedback.textContent = "En la cola" + (msg.title ? ": " + msg.title : "");
-      els.feedback.classList.remove("boom");
-      void els.feedback.offsetWidth;
-      els.feedback.classList.add("boom");
-      els.input.value = "";
-    }
-    if (msg.type === "nack") {
-      els.feedback.textContent = msg.reason === "full"
-        ? "La cola está llena."
-        : "Ese enlace no parece de YouTube.";
-    }
+  function waitReply(roomId, key) {
+    const replyRef = db.ref("rooms/" + roomId + "/replies/" + key);
+    replyRef.on("value", (snap) => {
+      const msg = snap.val();
+      if (!msg) return;
+      replyRef.off();
+      if (msg.type === "ack") {
+        els.feedback.textContent = "En la cola" + (msg.title ? ": " + msg.title : "");
+        els.feedback.classList.remove("boom");
+        void els.feedback.offsetWidth;
+        els.feedback.classList.add("boom");
+        els.input.value = "";
+      } else {
+        els.feedback.textContent = msg.reason === "full"
+          ? "La cola está llena."
+          : "Ese enlace no parece de YouTube.";
+      }
+    });
   }
 
-  function markGuestReady() {
-    els.add.disabled = false;
-    setGuestStatus("Conectado a la sala.", "ok");
-  }
-
-  function sendAdd(id) {
-    const payload = { type: "add", video: id, who: state.username };
-    let sent = false;
-    if (state.guestConn && state.guestConn.open) {
-      state.guestConn.send(payload);
-      sent = true;
-    }
-    if (state.bus) {
-      state.bus.postMessage(payload);
-      sent = true;
-    }
-    return sent;
-  }
-
-  function startGuest(roomId) {
+  async function startGuest(roomId) {
     state.role = "guest";
     state.roomId = roomId;
     show(els.guest);
     setGuestStatus("Conectando…");
 
-    state.bus = openRoomBus(roomId, onGuestMessage);
-    if (state.bus) state.bus.postMessage({ type: "hello", who: state.username });
-
-    if (typeof Peer !== "undefined") {
-      const peer = new Peer({ debug: 0 });
-      state.peer = peer;
-      const connect = () => {
-        const conn = peer.connect(roomId, { reliable: true });
-        state.guestConn = conn;
-        conn.on("open", () => {
-          conn.send({ type: "hello", who: state.username });
-          markGuestReady();
-        });
-        conn.on("data", onGuestMessage);
-        conn.on("close", () => {
-          if (!state.bus) {
-            els.add.disabled = true;
-            setGuestStatus("Se cortó. Reconectando…", "bad");
-          }
-          setTimeout(connect, 1200);
-        });
-      };
-      peer.on("open", connect);
-      peer.on("error", () => {
-        if (state.bus) {
-          els.add.disabled = false;
-          setGuestStatus("Sala local en este navegador.", "ok");
-        } else {
-          setGuestStatus("No encuentro la sala. ¿Está abierta en la tele?", "bad");
-        }
-      });
-    } else if (state.bus) {
-      els.add.disabled = false;
-      setGuestStatus("Sala local en este navegador.", "ok");
-    } else {
+    if (!db) {
       setGuestStatus("No se pudo cargar la conexión.", "bad");
+      return;
     }
 
-    els.form.addEventListener("submit", (e) => {
+    try {
+      const open = await roomPath(roomId).child("open").get();
+      if (!open.exists() || !open.val()) {
+        setGuestStatus("No encuentro la sala. ¿Está abierta en la tele?", "bad");
+        return;
+      }
+    } catch (err) {
+      setGuestStatus("No se pudo entrar a la sala.", "bad");
+      console.error(err);
+      return;
+    }
+
+    els.add.disabled = false;
+    setGuestStatus("Conectado a la sala.", "ok");
+    roomPath(roomId).child("playback").on("value", (snap) => {
+      const data = snap.val() || {};
+      renderGuestQueue({
+        current: data.current || null,
+        queue: data.queue || [],
+      });
+    });
+
+    els.form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const id = extractVideoId(els.input.value);
       if (!id) {
         els.feedback.textContent = "Pega un enlace de YouTube.";
         return;
       }
-      if (!sendAdd(id)) {
-        els.feedback.textContent = "Aún no hay conexión con la sala.";
-        return;
-      }
       els.feedback.textContent = "Enviando…";
+      try {
+        const req = await roomPath(roomId).child("inbox").push({
+          video: id,
+          who: state.username,
+          ts: Date.now(),
+        });
+        waitReply(roomId, req.key);
+      } catch (err) {
+        els.feedback.textContent = "No se pudo enviar.";
+        console.error(err);
+      }
     });
   }
 })();
