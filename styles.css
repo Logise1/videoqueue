@@ -222,17 +222,6 @@ input {
   letter-spacing: -0.04em;
 }
 
-.attract-copy p {
-  color: var(--muted);
-  max-width: 26rem;
-  line-height: 1.5;
-}
-
-.net-hint {
-  margin-top: 14px;
-  color: #ffd166 !important;
-}
-
 .qr-card,
 .qr-modal-card {
   background: var(--card);

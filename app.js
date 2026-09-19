@@ -36,7 +36,6 @@
     feedback: document.getElementById("add-feedback"),
     list: document.getElementById("guest-list"),
     count: document.getElementById("guest-count"),
-    netHint: document.getElementById("net-hint"),
   };
 
   const state = {
@@ -425,16 +424,9 @@
     show(els.host);
     let url = joinLink(roomId);
     const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-    if (location.protocol === "file:") {
-      els.netHint.textContent = "Abre esta carpeta con un servidor (por ejemplo Python) y usa la IP de la Wi‑Fi. Si no, el móvil no puede entrar.";
-    } else if (localHost) {
+    if (localHost) {
       const lan = await discoverLanIp();
-      if (lan) {
-        url = joinLink(roomId, lan);
-        els.netHint.textContent = "QR listo para la red local: " + lan;
-      } else {
-        els.netHint.textContent = "Estás en localhost. Abre la tele con tu IP de Wi‑Fi (192.168.x.x) para que el móvil escanee bien.";
-      }
+      if (lan) url = joinLink(roomId, lan);
     }
     els.roomCode.textContent = "Sala " + roomId;
     els.joinUrl.textContent = url;
