@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>VideoQueue</title>
+  <meta name="theme-color" content="#0b0b10" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect rx='14' width='64' height='64' fill='%23ff4d6d'/%3E%3Cpath d='M24 18h6v28h-6zM34 18h6v28h-6z' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="glow glow-a" aria-hidden="true"></div>
+  <div class="glow glow-b" aria-hidden="true"></div>
+
+  <section id="view-landing" class="view view-landing">
+    <div class="landing-inner">
+      <p class="eyebrow">Cola compartida</p>
+      <h1>Video<span>Queue</span></h1>
+      <p class="lead">Crea una sala en la tele, escanea el QR y la gente pone videos de YouTube.</p>
+      <button id="btn-create" class="btn" type="button">Crear sala</button>
+    </div>
+  </section>
+
+  <section id="view-host" class="view view-host hidden" hidden>
+    <div id="player-stage" class="player-stage">
+      <div id="yt-player"></div>
+    </div>
+    <div id="fade-veil" class="fade-veil"></div>
+
+    <div id="attract" class="attract">
+      <div class="attract-copy">
+        <p class="eyebrow">Sala abierta</p>
+        <h2>Escanea y pon un video</h2>
+        <p>El siguiente sale aquí, a pantalla completa.</p>
+        <p id="net-hint" class="net-hint"></p>
+      </div>
+      <div class="qr-card">
+        <div id="qr-main" class="qr-box"></div>
+        <p id="room-code" class="room-code"></p>
+      </div>
+    </div>
+
+    <aside id="now-toast" class="toast" aria-live="polite">
+      <img id="toast-thumb" alt="" />
+      <div>
+        <span>Ahora suena</span>
+        <strong id="toast-title"></strong>
+      </div>
+    </aside>
+
+    <aside id="added-toast" class="toast toast-added" aria-live="polite">
+      <img id="added-thumb" alt="" />
+      <div>
+        <span>Añadido a la cola</span>
+        <strong id="added-title"></strong>
+      </div>
+    </aside>
+
+    <button id="btn-qr-mini" class="qr-mini" type="button" aria-label="Mostrar código QR">
+      <div id="qr-mini" class="qr-box qr-box-mini"></div>
+    </button>
+
+    <div id="qr-modal" class="qr-modal hidden" hidden>
+      <div class="qr-modal-card">
+        <div id="qr-modal-box" class="qr-box"></div>
+        <p id="join-url" class="join-url"></p>
+        <button id="btn-close-qr" class="btn btn-ghost" type="button">Cerrar</button>
+      </div>
+    </div>
+
+    <div id="host-bar" class="host-bar">
+      <span id="queue-badge">Cola · 0</span>
+      <button id="btn-skip" class="btn btn-ghost" type="button">Siguiente</button>
+    </div>
+
+    <button id="unlock" class="btn unlock hidden" type="button" hidden>Toca para oír</button>
+  </section>
+
+  <section id="view-guest" class="view view-guest hidden" hidden>
+    <header class="guest-top">
+      <p class="eyebrow">VideoQueue</p>
+      <h1>Pon un video</h1>
+      <p id="guest-status" class="guest-status">Conectando…</p>
+    </header>
+
+    <form id="add-form" class="add-form" autocomplete="off">
+      <label for="video-input">Enlace de YouTube</label>
+      <input id="video-input" name="video" type="url" inputmode="url" placeholder="https://youtu.be/…" required />
+      <button id="btn-add" class="btn btn-block" type="submit" disabled>Añadir a la cola</button>
+    </form>
+
+    <p id="add-feedback" class="add-feedback" aria-live="polite"></p>
+
+    <section class="guest-queue">
+      <div class="queue-head">
+        <h2>En pantalla</h2>
+        <span id="guest-count">0</span>
+      </div>
+      <ul id="guest-list" class="guest-list"></ul>
+    </section>
+  </section>
+
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
