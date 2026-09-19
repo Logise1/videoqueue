@@ -191,27 +191,12 @@
 
   function extractVideoId(raw) {
     const value = String(raw || "").trim();
+    if (!value) return null;
+    const match = value.match(
+      /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:[^#\s]*&)?v=|embed\/|shorts\/|live\/|v\/))([a-zA-Z0-9_-]{11})/i
+    );
+    if (match) return match[1];
     if (YT_ID.test(value)) return value;
-
-    try {
-      const url = new URL(value);
-      const host = url.hostname.replace(/^www\./, "");
-      if (host === "youtu.be") {
-        const id = url.pathname.split("/").filter(Boolean)[0];
-        return YT_ID.test(id) ? id : null;
-      }
-      if (host.endsWith("youtube.com")) {
-        const watch = url.searchParams.get("v");
-        if (YT_ID.test(watch)) return watch;
-        const parts = url.pathname.split("/").filter(Boolean);
-        const fromPath = parts[0] === "embed" || parts[0] === "shorts" || parts[0] === "live"
-          ? parts[1]
-          : null;
-        return YT_ID.test(fromPath) ? fromPath : null;
-      }
-    } catch (_) {
-      return null;
-    }
     return null;
   }
 
@@ -292,44 +277,69 @@
     if (state.ytReady) return state.ytReady;
     state.ytReady = new Promise((resolve) => {
       if (window.YT && YT.Player) {
-        resolve();
+        resolve(true);
         return;
       }
+      const timer = setTimeout(() => resolve(false), 4000);
       const tag = document.createElement("script");
       tag.src = "https://www.youtube.com/iframe_api";
-      window.onYouTubeIframeAPIReady = () => resolve();
+      window.onYouTubeIframeAPIReady = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
       document.head.appendChild(tag);
     });
     return state.ytReady;
   }
 
+  function playViaEmbed(videoId) {
+    const stage = document.getElementById("player-stage");
+    let frame = document.getElementById("yt-embed");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.id = "yt-embed";
+      frame.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
+      frame.setAttribute("allowfullscreen", "true");
+      stage.appendChild(frame);
+    }
+    frame.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&rel=0&modestbranding=1&playsinline=1&fs=0&enablejsapi=1";
+  }
+
   async function ensurePlayer() {
-    await loadYouTube();
+    const apiOk = await loadYouTube();
     if (state.player && state.playerReady) return state.player;
+    if (!apiOk || !window.YT || !YT.Player) return null;
     if (state.playerWait) return state.playerWait;
     state.playerWait = new Promise((resolve) => {
-      state.player = new YT.Player("yt-player", {
-        width: "1280",
-        height: "720",
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          modestbranding: 1,
-          rel: 0,
-          iv_load_policy: 3,
-          playsinline: 1,
-        },
-        events: {
-          onReady: () => {
-            state.playerReady = true;
-            resolve(state.player);
+      const timer = setTimeout(() => resolve(null), 3000);
+      try {
+        state.player = new YT.Player("yt-player", {
+          width: "1280",
+          height: "720",
+          playerVars: {
+            autoplay: 1,
+            controls: 1,
+            disablekb: 0,
+            fs: 1,
+            modestbranding: 1,
+            rel: 0,
+            iv_load_policy: 3,
+            playsinline: 1,
           },
-          onStateChange: onPlayerState,
-          onError: () => playNext(true),
-        },
-      });
+          events: {
+            onReady: () => {
+              clearTimeout(timer);
+              state.playerReady = true;
+              resolve(state.player);
+            },
+            onStateChange: onPlayerState,
+            onError: () => playNext(true),
+          },
+        });
+      } catch (_) {
+        clearTimeout(timer);
+        resolve(null);
+      }
     });
     return state.playerWait;
   }
@@ -370,6 +380,8 @@
         player.unMute();
         player.playVideo();
       } catch (_) {}
+    } else {
+      playViaEmbed(item.id);
     }
     publishState();
   }
@@ -392,7 +404,7 @@
     const startsNow = !state.current;
     state.queue.push(meta);
     if (startsNow) {
-      await playNext(true);
+      playNext(true);
     } else {
       showAddedToast(meta);
       playSfx(sfx.added);
@@ -429,7 +441,22 @@
     state.roomId = roomId;
     state.roomRef = roomPath(roomId);
 
-    await loadYouTube();
+    try {
+      await state.roomRef.set({
+        open: true,
+        created: Date.now(),
+        playback: { current: null, queue: [] },
+      });
+      state.roomRef.child("inbox").on("child_added", (snap) => {
+        handleInboxItem(snap);
+      });
+    } catch (err) {
+      els.create.disabled = false;
+      els.roomCode.textContent = "No se pudo crear la sala";
+      console.error(err);
+      return;
+    }
+
     show(els.host);
     let url = joinLink(roomId);
     const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
@@ -443,23 +470,8 @@
     paintQr(els.qrMiniBox, url);
     paintQr(els.qrModalBox, url);
     refreshHostUi();
-
-    try {
-      await state.roomRef.set({
-        open: true,
-        created: Date.now(),
-        playback: { current: null, queue: [] },
-      });
-      state.roomRef.child("inbox").on("child_added", (snap) => {
-        handleInboxItem(snap);
-      });
-    } catch (err) {
-      els.roomCode.textContent = "No se pudo crear la sala";
-      console.error(err);
-    }
-
-    await ensurePlayer();
     bindHostChrome();
+    ensurePlayer();
   }
 
   function bindHostChrome() {
@@ -528,24 +540,50 @@
     });
   }
 
-  function waitReply(roomId, key) {
+  function markAdded(title) {
+    els.feedback.textContent = "En la cola" + (title ? ": " + title : "");
+    els.feedback.classList.remove("boom");
+    void els.feedback.offsetWidth;
+    els.feedback.classList.add("boom");
+    els.input.value = "";
+  }
+
+  function waitForAddResult(roomId, key, videoId) {
+    let done = false;
+    const finish = (ok, text) => {
+      if (done) return;
+      done = true;
+      replyRef.off();
+      playRef.off("value", onPlay);
+      if (ok) markAdded(text);
+      else els.feedback.textContent = text;
+    };
     const replyRef = db.ref("rooms/" + roomId + "/replies/" + key);
+    const playRef = roomPath(roomId).child("playback");
+    const onPlay = (snap) => {
+      const data = snap.val() || {};
+      const listed = asList(data.queue);
+      const hit = (data.current && data.current.id === videoId) || listed.some((item) => item.id === videoId);
+      if (hit) {
+        const title = (data.current && data.current.id === videoId && data.current.title)
+          || (listed.find((item) => item.id === videoId) || {}).title;
+        finish(true, title);
+      }
+    };
     replyRef.on("value", (snap) => {
       const msg = snap.val();
       if (!msg) return;
-      replyRef.off();
-      if (msg.type === "ack") {
-        els.feedback.textContent = "En la cola" + (msg.title ? ": " + msg.title : "");
-        els.feedback.classList.remove("boom");
-        void els.feedback.offsetWidth;
-        els.feedback.classList.add("boom");
-        els.input.value = "";
-      } else {
-        els.feedback.textContent = msg.reason === "full"
+      if (msg.type === "ack") finish(true, msg.title);
+      else {
+        finish(false, msg.reason === "full"
           ? "La cola está llena."
-          : "Ese enlace no parece de YouTube.";
+          : "Ese enlace no parece de YouTube.");
       }
     });
+    playRef.on("value", onPlay);
+    setTimeout(() => {
+      if (!done) finish(false, "La tele no responde. Deja la sala abierta y prueba otra vez.");
+    }, 8000);
   }
 
   async function startGuest(roomId) {
@@ -559,26 +597,24 @@
       return;
     }
 
-    try {
-      const open = await roomPath(roomId).child("open").get();
-      if (!open.exists() || !open.val()) {
-        setGuestStatus("No encuentro la sala. ¿Está abierta en la tele?", "bad");
+    const room = roomPath(roomId);
+    room.on("value", (snap) => {
+      const data = snap.val();
+      if (!data || !data.open) {
+        if (!els.add.disabled) return;
+        setGuestStatus("Esperando a la sala…", "bad");
         return;
       }
-    } catch (err) {
+      els.add.disabled = false;
+      setGuestStatus("Conectado a la sala.", "ok");
+      const playback = data.playback || {};
+      renderGuestQueue({
+        current: playback.current || null,
+        queue: playback.queue || [],
+      });
+    }, (err) => {
       setGuestStatus("No se pudo entrar a la sala.", "bad");
       console.error(err);
-      return;
-    }
-
-    els.add.disabled = false;
-    setGuestStatus("Conectado a la sala.", "ok");
-    roomPath(roomId).child("playback").on("value", (snap) => {
-      const data = snap.val() || {};
-      renderGuestQueue({
-        current: data.current || null,
-        queue: data.queue || [],
-      });
     });
 
     els.form.addEventListener("submit", async (e) => {
@@ -590,14 +626,14 @@
       }
       els.feedback.textContent = "Enviando…";
       try {
-        const req = await roomPath(roomId).child("inbox").push({
+        const req = await room.child("inbox").push({
           video: id,
           who: state.username,
           ts: Date.now(),
         });
-        waitReply(roomId, req.key);
+        waitForAddResult(roomId, req.key, id);
       } catch (err) {
-        els.feedback.textContent = "No se pudo enviar.";
+        els.feedback.textContent = "No se pudo enviar. Revisa la conexión.";
         console.error(err);
       }
     });
